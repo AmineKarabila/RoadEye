@@ -1,5 +1,4 @@
 // main.dart
-
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:video_player/video_player.dart';
@@ -9,8 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'camera_service.dart';
 import 'package:intl/intl.dart';
 import 'dart:async';
-import 'dart:math';
-import 'package:sensors_plus/sensors_plus.dart';
+import 'package:geolocator/geolocator.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,8 +24,11 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'RoadEye',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+      theme: ThemeData.dark().copyWith(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.deepPurple,
+          brightness: Brightness.dark,
+        ),
         useMaterial3: true,
       ),
       home: MyHomePage(cameras: cameras),
@@ -51,10 +52,7 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _isRecording = false;
   String _currentTime = "";
   double _currentSpeed = 0.0; // Geschwindigkeit in m/s
-  late StreamSubscription<AccelerometerEvent> _accelerometerSubscription;
-  double _accelerationX = 0.0;
-  double _accelerationY = 0.0;
-  double _accelerationZ = 0.0;
+  StreamSubscription<Position>? _positionSubscription;
   List<Map<String, dynamic>> _metadata = [];
 
   @override
@@ -63,7 +61,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _cameraService = CameraService(widget.cameras.first);
     _initializeCamera(); // Kamera initialisieren
     _startClock(); // Startet die Uhr zur Anzeige der aktuellen Uhrzeit
-    _startAccelerometer(); // Startet den Beschleunigungssensor
+    _startTrackingSpeed(); // Startet die Geschwindigkeitserfassung über GPS
   }
 
   Future<void> _initializeCamera() async {
@@ -77,7 +75,6 @@ class _MyHomePageState extends State<MyHomePage> {
     Timer.periodic(const Duration(milliseconds: 100), (timer) {
       setState(() {
         _currentTime = DateFormat('HH:mm:ss.SSS').format(DateTime.now());
-        _currentSpeed = _calculateSpeedFromAcceleration(); // Geschwindigkeit basierend auf Beschleunigung berechnen
       });
       // Während der Aufnahme die Uhrzeit und Geschwindigkeit als Metadatum speichern
       if (_isRecording) {
@@ -90,50 +87,48 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
-  void _startAccelerometer() {
-    _accelerometerSubscription = accelerometerEvents.listen((AccelerometerEvent event) {
-      setState(() {
-        _accelerationX = event.x;
-        _accelerationY = event.y;
-        _accelerationZ = event.z;
+  void _startTrackingSpeed() async {
+    // Prüfe und fordere Standortberechtigungen an
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
+      // Abonniere die Positionsänderungen
+      _positionSubscription = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          distanceFilter: 0, // Erfassung auch bei minimalster Bewegung
+        ),
+      ).listen((Position position) {
+        setState(() {
+          // Geschwindigkeit in m/s direkt aus GPS-Daten
+          double newSpeed = position.speed;
+
+          // Erhöhung der Empfindlichkeit: Geschwindigkeit wird in 0.1 km/h Schritten erhöht/angezeigt
+          _currentSpeed = newSpeed < 0 ? 0.0 : double.parse((newSpeed * 3.6).toStringAsFixed(1)) / 3.6; // Umwandlung zurück in m/s mit 0.1 km/h Schritten
+        });
       });
-    });
-  }
-
-  double _calculateSpeedFromAcceleration() {
-    // Berechnung der Geschwindigkeit basierend auf der Beschleunigung
-    double accelerationMagnitude = sqrt(
-      (_accelerationX * _accelerationX) +
-      (_accelerationY * _accelerationY) +
-      (_accelerationZ * _accelerationZ),
-    );
-
-    // Kleinen Schwellenwert definieren, um Rauschen zu ignorieren
-    const double threshold = 1.0; // Einheit in m/s^2
-
-    // Wenn die Beschleunigung geringer als der Schwellenwert ist, Dämpfung anwenden
-    if (accelerationMagnitude < threshold) {
-      _currentSpeed *= 0.95; // Geschwindigkeit allmählich dämpfen
     } else {
-      // Geschwindigkeit berechnen: Geschwindigkeit = Beschleunigung * Zeit
-      // Da wir alle 0.1 Sekunden abtasten, ist deltaTime = 0.1
-      _currentSpeed += (accelerationMagnitude * 0.1);
+      setState(() {
+        _currentSpeed = 0.0; // Keine Berechtigung -> Geschwindigkeit auf 0 setzen
+      });
     }
-
-    if (_currentSpeed < 0) {
-      _currentSpeed = 0; // Geschwindigkeit kann nicht negativ sein
-    }
-    return _currentSpeed;
   }
 
   Future<void> _captureVideo() async {
     if (_isCameraInitialized && !_isRecording) {
+      // Start der Videoaufnahme
       setState(() {
         _isRecording = true;
         _metadata.clear(); // Vor der Aufnahme Metadatenliste leeren
       });
 
-      final result = await _cameraService.captureVideo();
+      await _cameraService.startVideoRecording();
+    } else if (_isRecording) {
+      // Stoppen der Videoaufnahme
+      final result = await _cameraService.stopVideoRecording();
 
       setState(() {
         if (result != null) {
@@ -149,9 +144,14 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _saveMetadata(String videoPath) async {
-    final metadataPath = '${videoPath}_metadata.json';
-    final File metadataFile = File(metadataPath);
-    await metadataFile.writeAsString(jsonEncode(_metadata));
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final metadataPath = '${directory.path}/${videoPath.split('/').last}_metadata.json';
+      final File metadataFile = File(metadataPath);
+      await metadataFile.writeAsString(jsonEncode(_metadata));
+    } catch (e) {
+      print('Fehler beim Speichern der Metadaten: $e');
+    }
   }
 
   void _showGallery() {
@@ -167,7 +167,7 @@ class _MyHomePageState extends State<MyHomePage> {
         height: 400,
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Colors.black87,
           borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(20),
             topRight: Radius.circular(20),
@@ -177,7 +177,7 @@ class _MyHomePageState extends State<MyHomePage> {
             ? Center(
                 child: Text(
                   "Noch keine Videos vorhanden",
-                  style: TextStyle(fontSize: 18, color: Colors.grey.shade800),
+                  style: TextStyle(fontSize: 18, color: Colors.grey.shade300),
                 ),
               )
             : GridView.builder(
@@ -220,7 +220,8 @@ class _MyHomePageState extends State<MyHomePage> {
 
   void _playVideo(File videoFile) async {
     // Lade die Metadaten
-    final metadataPath = '${videoFile.path}_metadata.json';
+    final directory = await getApplicationDocumentsDirectory();
+    final metadataPath = '${directory.path}/${videoFile.path.split('/').last}_metadata.json';
     File metadataFile = File(metadataPath);
     List<Map<String, dynamic>> metadata = [];
     if (await metadataFile.exists()) {
@@ -238,7 +239,7 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void dispose() {
     _cameraService.dispose();
-    _accelerometerSubscription.cancel();
+    _positionSubscription?.cancel(); // Beende das GPS-Tracking
     super.dispose();
   }
 
@@ -247,23 +248,21 @@ class _MyHomePageState extends State<MyHomePage> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: const Text("Flutter Camera Demo"),
+        title: const Text("RoadEye"),
       ),
       body: SafeArea(
         child: _isCameraInitialized
             ? Stack(
                 children: [
-                  // Kamera-Vorschau anzeigen
                   Positioned.fill(
                     child: _cameraService.getCameraPreview(),
                   ),
-                  // Aktuelle Uhrzeit anzeigen
                   Positioned(
                     bottom: 20,
                     left: 20,
                     child: Container(
                       padding: const EdgeInsets.all(8),
-                      color: Colors.black.withOpacity(0.5),
+                      color: Colors.black.withOpacity(0.7),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -297,14 +296,14 @@ class _MyHomePageState extends State<MyHomePage> {
           // Hintergrund der BottomBar
           Container(
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Colors.black87,
               borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(20),
                 topRight: Radius.circular(20),
               ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
+                  color: Colors.black.withOpacity(0.5),
                   spreadRadius: 5,
                   blurRadius: 10,
                 ),
@@ -321,13 +320,13 @@ class _MyHomePageState extends State<MyHomePage> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.video_library, size: 28, color: Colors.grey.shade800),
+                      Icon(Icons.video_library, size: 28, color: Colors.grey.shade300),
                       const SizedBox(height: 5),
                       Text(
                         "Galerie",
                         style: TextStyle(
                           fontSize: 12,
-                          color: Colors.grey.shade600,
+                          color: Colors.grey.shade400,
                         ),
                       ),
                     ],
@@ -341,13 +340,13 @@ class _MyHomePageState extends State<MyHomePage> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.settings, size: 28, color: Colors.grey.shade800),
+                      Icon(Icons.settings, size: 28, color: Colors.grey.shade300),
                       const SizedBox(height: 5),
                       Text(
                         "Einstellungen",
                         style: TextStyle(
                           fontSize: 12,
-                          color: Colors.grey.shade600,
+                          color: Colors.grey.shade400,
                         ),
                       ),
                     ],
@@ -455,7 +454,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             left: 20,
             child: Container(
               padding: const EdgeInsets.all(8),
-              color: Colors.black.withOpacity(0.5),
+              color: Colors.black.withOpacity(0.7),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -484,117 +483,3 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     );
   }
 }
-
-
-
-/*
-import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart';
-import 'dart:async';
-
-void main() {
-  runApp(const MyApp());
-}
-
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'GPS Geschwindigkeit',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-      ),
-      home: const MyHomePage(),
-    );
-  }
-}
-
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key});
-
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
-}
-
-class _MyHomePageState extends State<MyHomePage> {
-  double _speed = 0.0; // Geschwindigkeit in m/s
-  StreamSubscription<Position>? _positionSubscription;
-
-  @override
-  void initState() {
-    super.initState();
-    _startTrackingSpeed();
-  }
-
-  void _startTrackingSpeed() async {
-    // Prüfe und fordere Standortberechtigungen an
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
-      permission = await Geolocator.requestPermission();
-    }
-
-    if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
-      // Abonniere die Positionsänderungen
-      _positionSubscription = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 5, // Aktualisierung nach mindestens 5 Metern Bewegung
-        ),
-      ).listen((Position position) {
-        setState(() {
-          // Geschwindigkeit in m/s direkt aus GPS-Daten
-          _speed = position.speed; // Geschwindigkeit in m/s
-        });
-      });
-    } else {
-      setState(() {
-        _speed = 0.0; // Keine Berechtigung -> Geschwindigkeit auf 0 setzen
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    _positionSubscription?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: const Text("GPS Geschwindigkeit"),
-      ),
-      body: SafeArea(
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Text(
-                "Aktuelle Geschwindigkeit:",
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 20),
-              Text(
-                "${_speed.toStringAsFixed(2)} m/s",
-                style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                "${(_speed * 3.6).toStringAsFixed(2)} km/h",
-                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w500, color: Colors.grey),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-
-*/
