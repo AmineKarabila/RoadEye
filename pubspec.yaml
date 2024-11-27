@@ -39,6 +39,7 @@ dependencies:
   intl: ^0.17.0  # Hier wird intl hinzugefügt
   sensors_plus: ^6.1.0
   geolocator: ^9.0.2
+  google_maps_flutter: ^2.10.0
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -60,7 +61,8 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
-
+  assets:
+    - assets/placeholder_map.png
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.

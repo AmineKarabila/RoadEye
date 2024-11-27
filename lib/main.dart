@@ -1,7 +1,6 @@
 // main.dart
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'package:video_player/video_player.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
@@ -9,6 +8,12 @@ import 'camera_service.dart';
 import 'package:intl/intl.dart';
 import 'dart:async';
 import 'package:geolocator/geolocator.dart';
+import 'videoplayer.dart';
+import 'video_summary_popup.dart';
+import 'video_details_screen.dart';
+import 'map_generator.dart';
+import "render_image.dart";
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -116,32 +121,66 @@ class _MyHomePageState extends State<MyHomePage> {
       });
     }
   }
+Future<void> _captureVideo() async {
+  if (_isCameraInitialized && !_isRecording) {
+    setState(() {
+      _isRecording = true;
+      _metadata.clear(); // Clear metadata before recording
+    });
 
-  Future<void> _captureVideo() async {
-    if (_isCameraInitialized && !_isRecording) {
-      // Start der Videoaufnahme
-      setState(() {
-        _isRecording = true;
-        _metadata.clear(); // Vor der Aufnahme Metadatenliste leeren
-      });
+    await _cameraService.startVideoRecording();
+  } else if (_isRecording) {
+    final result = await _cameraService.stopVideoRecording();
 
-      await _cameraService.startVideoRecording();
-    } else if (_isRecording) {
-      // Stoppen der Videoaufnahme
-      final result = await _cameraService.stopVideoRecording();
-
-      setState(() {
-        if (result != null) {
-          _recordedVideos.add(result.video);
-          if (result.thumbnail != null) {
-            _thumbnails.add(result.thumbnail!);
-          }
-          _saveMetadata(result.video.path); // Metadaten nach der Aufnahme speichern
+    setState(() async {
+      if (result != null) {
+        _recordedVideos.add(result.video);
+        if (result.thumbnail != null) {
+          _thumbnails.add(result.thumbnail!);
         }
-        _isRecording = false;
-      });
-    }
+        await _saveMetadata(result.video.path);
+
+        // Generate the map image
+        File? mapImage;
+        try {
+          mapImage = await generateMap(_metadata);
+        } catch (e) {
+          print("Fehler bei der Karten-Generierung: $e");
+        }
+
+        // Fallback auf Platzhalterbild
+        mapImage ??= null; // Kein Platzhalter im Code, Widget zeigt das Asset
+
+
+        // Berechne Geschwindigkeitsstatistiken
+        double calculatedAvgSpeed = _metadata.map((data) => data['speed_kmph']).reduce((a, b) => a + b) / _metadata.length;
+        double calculatedMaxSpeed = _metadata.map((data) => data['speed_kmph']).reduce((a, b) => a > b ? a : b);
+        double calculatedMinSpeed = _metadata.map((data) => data['speed_kmph']).reduce((a, b) => a < b ? a : b);
+
+        // Zeige das Pop-up mit den Ergebnissen
+        showDialog(
+          context: context,
+          builder: (context) => VideoSummaryPopup(
+            thumbnail: result.thumbnail!,
+            mapImage: mapImage,
+            avgSpeed: calculatedAvgSpeed,
+            maxSpeed: calculatedMaxSpeed,
+            minSpeed: calculatedMinSpeed,
+            onClose: () => Navigator.of(context).pop(),
+            onPlayVideo: () {
+              Navigator.of(context).pop();
+              _playVideo(result.video);
+            },
+          ),
+        );
+      }
+      _isRecording = false;
+    });
   }
+}
+
+
+
 
   Future<void> _saveMetadata(String videoPath) async {
     try {
@@ -218,23 +257,56 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  void _playVideo(File videoFile) async {
-    // Lade die Metadaten
-    final directory = await getApplicationDocumentsDirectory();
-    final metadataPath = '${directory.path}/${videoFile.path.split('/').last}_metadata.json';
-    File metadataFile = File(metadataPath);
-    List<Map<String, dynamic>> metadata = [];
-    if (await metadataFile.exists()) {
-      final String content = await metadataFile.readAsString();
-      metadata = List<Map<String, dynamic>>.from(jsonDecode(content));
-    }
 
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => VideoPlayerScreen(videoFile: videoFile, metadata: metadata),
-      ),
-    );
+void _playVideo(File videoFile) async {
+  final directory = await getApplicationDocumentsDirectory();
+  final metadataPath = '${directory.path}/${videoFile.path.split('/').last}_metadata.json';
+  File metadataFile = File(metadataPath);
+  List<Map<String, dynamic>> metadata = [];
+  if (await metadataFile.exists()) {
+    final String content = await metadataFile.readAsString();
+    metadata = List<Map<String, dynamic>>.from(jsonDecode(content));
   }
+
+  // Lade die Karte, falls sie existiert
+  final mapPath = '${directory.path}/${videoFile.path.split('/').last}_map.png';
+  File? mapImage = File(mapPath);
+  if (!await mapImage.exists()) {
+    print("Karte nicht gefunden. Generiere neue Karte...");
+    try {
+      mapImage = await generateMap(metadata);
+    } catch (e) {
+      print("Fehler bei der Karten-Generierung: $e");
+      mapImage = File('assets/placeholder_map.png'); // Platzhalterbild aus Assets
+    }
+  }
+
+  // Fallback auf Platzhalterbild
+  mapImage ??= null; // Kein Platzhalter im Code, Widget zeigt das Asset
+
+
+  double avgSpeed = metadata.map((data) => data['speed_kmph']).reduce((a, b) => a + b) / metadata.length;
+  double maxSpeed = metadata.map((data) => data['speed_kmph']).reduce((a, b) => a > b ? a : b);
+  double minSpeed = metadata.map((data) => data['speed_kmph']).reduce((a, b) => a < b ? a : b);
+
+  Navigator.of(context).push(MaterialPageRoute(
+    fullscreenDialog: true,
+    builder: (context) => VideoSummaryPopupWidget(
+    thumbnail: result.thumbnail!,
+    mapImage: mapImage,
+    avgSpeed: calculatedAvgSpeed,
+    maxSpeed: calculatedMaxSpeed,
+    minSpeed: calculatedMinSpeed,
+    onClose: () => Navigator.of(context).pop(),
+    onPlayVideo: () {
+      Navigator.of(context).pop();
+      _playVideo(result.video);
+  },
+),
+  ));
+}
+
+
 
   @override
   void dispose() {
@@ -375,106 +447,6 @@ class _MyHomePageState extends State<MyHomePage> {
                   ],
                 ),
                 child: const Icon(Icons.videocam, color: Colors.white, size: 40),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// VideoPlayerScreen Widget zum Abspielen eines Videos
-class VideoPlayerScreen extends StatefulWidget {
-  final File videoFile;
-  final List<Map<String, dynamic>> metadata;
-  const VideoPlayerScreen({super.key, required this.videoFile, required this.metadata});
-
-  @override
-  State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
-}
-
-class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
-  late VideoPlayerController _videoPlayerController;
-  late Timer _metadataTimer;
-  String _currentTime = "";
-  String _currentSpeed = "";
-  int _metadataIndex = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _videoPlayerController = VideoPlayerController.file(widget.videoFile)
-      ..initialize().then((_) {
-        setState(() {});
-        _videoPlayerController.play();
-        _startMetadataTimer();
-      });
-  }
-
-  void _startMetadataTimer() {
-    _metadataTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
-      if (_metadataIndex < widget.metadata.length) {
-        setState(() {
-          _currentTime = widget.metadata[_metadataIndex]['time'];
-          _currentSpeed = "${widget.metadata[_metadataIndex]['speed_mps'].toStringAsFixed(2)} m/s (${widget.metadata[_metadataIndex]['speed_kmph'].toStringAsFixed(2)} km/h)";
-          _metadataIndex++;
-        });
-      } else {
-        _metadataTimer.cancel();
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _videoPlayerController.dispose();
-    _metadataTimer.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Video Player"),
-      ),
-      body: Stack(
-        children: [
-          Center(
-            child: _videoPlayerController.value.isInitialized
-                ? AspectRatio(
-                    aspectRatio: _videoPlayerController.value.aspectRatio,
-                    child: VideoPlayer(_videoPlayerController),
-                  )
-                : const CircularProgressIndicator(),
-          ),
-          Positioned(
-            bottom: 20,
-            left: 20,
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              color: Colors.black.withOpacity(0.7),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    "Zeit: $_currentTime",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  Text(
-                    "Geschwindigkeit: $_currentSpeed",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
               ),
             ),
           ),
