@@ -1,1 +1,0 @@
- /Users/aminekarabila/Desktop/Besserwerdenalsalleanderen/RoadEye/.dart_tool/flutter_build/07474860c1a8f6258ddf3cef6d340962/native_assets.yaml: 
