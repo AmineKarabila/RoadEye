@@ -5,6 +5,8 @@ import 'dart:io';
 class CameraService {
   final CameraDescription cameraDescription;
   late CameraController _cameraController;
+  
+
 
   CameraService(this.cameraDescription);
 
@@ -15,6 +17,7 @@ class CameraService {
     );
     await _cameraController.initialize();
   }
+  CameraController get controller => _cameraController;
 
   Widget getCameraPreview() {
     return CameraPreview(_cameraController);
