@@ -38,4 +38,6 @@ class SpeedService {
   void dispose() {
     _speedStreamController.close();
   }
+
+  
 }

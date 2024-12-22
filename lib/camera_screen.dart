@@ -11,6 +11,9 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
+import 'video_player_screen.dart';
+import 'main.dart';
+import 'file_storage_util.dart';
 
 
 class CameraScreen extends StatefulWidget {
@@ -41,8 +44,8 @@ class _CameraScreenState extends State<CameraScreen> {
   @override
   void initState() {
     super.initState();
- 
-
+  
+    _loadPersistentData();
     _cameraService = CameraService(widget.cameras.first);
     _initializeCamera();
     _speedService = SpeedService();
@@ -52,6 +55,33 @@ class _CameraScreenState extends State<CameraScreen> {
       });
     });
   }
+
+  Future<List<File>> loadVideos() async {
+    // Hole den persistenten Speicherort
+    final persistentDir = await FileStorageUtil.getPersistentDirectory();
+    
+    // Durchsuche den Ordner nach .mp4-Dateien
+    return persistentDir
+        .listSync()
+        .where((file) => file.path.endsWith('.mp4'))
+        .map((file) => File(file.path))
+        .toList();
+  }
+
+  void _loadPersistentData() async {
+    final persistentDir = await FileStorageUtil.getPersistentDirectory();
+    final videoFiles = persistentDir
+        .listSync()
+        .where((file) => file.path.endsWith('.mp4'))
+        .map((file) => File(file.path))
+        .toList();
+
+    setState(() {
+      _recordedVideos.addAll(videoFiles);
+    });
+  }
+  
+ 
 
   @override
   void dispose() {
@@ -109,14 +139,17 @@ class _CameraScreenState extends State<CameraScreen> {
 
 //------------    MAPS -----------------
 
-  Future<void> _saveRoute(List<LatLng> route, String videoFileName) async {
-    final directory = await getApplicationDocumentsDirectory();
-    final filePath = '${directory.path}/${videoFileName}_route.json';
+ Future<void> _saveRoute(List<LatLng> route, String videoFileName) async {
+    final persistentDir = await FileStorageUtil.getPersistentDirectory();
+    final routePath = '${persistentDir.path}/${videoFileName}_route.json';
+
     final routeData = route
         .map((coord) => {'latitude': coord.latitude, 'longitude': coord.longitude})
         .toList();
-    final file = File(filePath);
+
+    final file = File(routePath);
     await file.writeAsString(jsonEncode(routeData));
+    print('Route gespeichert: $routePath');
   }
 
   void _onMapCreated(GoogleMapController controller) {
@@ -268,19 +301,28 @@ class _CameraScreenState extends State<CameraScreen> {
     await _initializeCamera();
   }
 
- void _startStopRecording() async {
+void _startStopRecording() async {
   try {
     if (_isRecording) {
-      
       // Stop Recording
       _stopTracking();
       final result = await _cameraService.stopVideoRecording();
       if (result != null) {
-        _processVideo(result.video);
+        // Video in den persistenten Speicher verschieben
+        final persistentDir = await FileStorageUtil.getPersistentDirectory();
+        final savedVideo = await result.video.copy(
+          '${persistentDir.path}/${result.video.path.split('/').last}',
+        );
+
+        // Route speichern
+        await _saveRoute(_routeCoordinates, savedVideo.path.split('/').last);
+
         setState(() {
-          _recordedVideos.add(result.video);
+          _recordedVideos.add(savedVideo); // Persistent gespeichertes Video verwenden
         });
-        _saveRoute(_routeCoordinates, result.video.path.split('/').last);
+
+        // Prozessierung des Videos (falls weiterhin benötigt)
+        _processVideo(savedVideo);
       }
     } else {
       // Start Recording
@@ -465,20 +507,24 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   }
 
   Future<void> _loadRoute() async {
-    final directory = await getApplicationDocumentsDirectory();
-    final routeFileName = '${widget.videoFile.path.split('/').last}_route.json';
-    final filePath = '${directory.path}/$routeFileName';
-    final file = File(filePath);
+    final persistentDir = await FileStorageUtil.getPersistentDirectory(); // Korrekt: Persistent Directory verwenden
+    final routePath = '${persistentDir.path}/${widget.videoFile.path.split('/').last}_route.json';
+    final file = File(routePath);
 
-    if (await file.exists()) {
-      final routeData = jsonDecode(await file.readAsString()) as List;
-      setState(() {
-        _loadedRoute = routeData
-            .map((coord) =>
-                LatLng(coord['latitude'] as double, coord['longitude'] as double))
-            .toList();
-      });
+    if (!await file.exists()) {
+      print('Route-Datei nicht gefunden: $routePath');
+      return;
     }
+
+    print('Lade Route-Datei: $routePath'); // Debugging-Log
+
+    final routeData = jsonDecode(await file.readAsString()) as List;
+    setState(() {
+      _loadedRoute = routeData
+          .map((coord) =>
+              LatLng(coord['latitude'] as double, coord['longitude'] as double))
+          .toList();
+    });
   }
 
   void _showMapPopup() {
