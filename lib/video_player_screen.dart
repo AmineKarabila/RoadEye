@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'dart:io';
 import 'package:video_player/video_player.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:path_provider/path_provider.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'file_storage_util.dart';
+
 
 
 class VideoPlayerScreen extends StatefulWidget {
@@ -20,8 +20,7 @@ class VideoPlayerScreen extends StatefulWidget {
 class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   late VideoPlayerController _controller;
   List<LatLng> _loadedRoute = [];
-  
-  
+
   @override
   void initState() {
     super.initState();
@@ -100,18 +99,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     super.dispose();
   }
 
-
-static Future<void> deleteFile(String filePath) async {
-  final file = File(filePath);
-  if (await file.exists()) {
-    await file.delete();
-    print('Datei gelöscht: $filePath');
-  } else {
-    print('Datei nicht gefunden: $filePath');
-  }
-}
-
-
 @override
 Widget build(BuildContext context) {
   return Scaffold(
@@ -171,8 +158,4 @@ Widget build(BuildContext context) {
       ],
     ),
   );
-}
-  //----
-
-
-}
+}}
