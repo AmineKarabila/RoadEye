@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import 'video_player_screen.dart';
 import 'main.dart';
 import 'file_storage_util.dart';
+import 'package:video_thumbnail/video_thumbnail.dart' as thumbnail;
 
 
 class CameraScreen extends StatefulWidget {
@@ -350,53 +351,98 @@ void _startStopRecording() async {
   }
 }
 
+Future<File?> _generateThumbnail(String videoPath) async {
+  // Initialisiere den VideoPlayerController, um die Länge zu ermitteln
+  final controller = VideoPlayerController.file(File(videoPath));
+  await controller.initialize();
 
-  void _showGallery() {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(8.0),
-        child: GridView.builder(
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            crossAxisSpacing: 8.0,
-            mainAxisSpacing: 8.0,
-          ),
-          itemCount: _recordedVideos.length,
-          itemBuilder: (context, index) {
-            return GestureDetector(
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => VideoPlayerScreen(videoFile: _recordedVideos[index]),
-                  ),
-                );
-              },
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: Image.file(
-                      _recordedVideos[index],
-                      fit: BoxFit.cover,
-                    ),
-                  ),
-                  const Align(
-                    alignment: Alignment.bottomCenter,
-                    child: Icon(
-                      Icons.play_circle_fill,
-                      color: Colors.white,
-                      size: 50,
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-      ),
-    );
+  // Berechne die Mitte des Videos in Millisekunden
+  final int middleTime = (controller.value.duration.inMilliseconds / 2).round();
+
+  // Generiere das Thumbnail aus der Mitte des Videos
+  final thumbnailPath = await thumbnail.VideoThumbnail.thumbnailFile(
+    video: videoPath,
+    thumbnailPath: (await getTemporaryDirectory()).path,
+    imageFormat: thumbnail.ImageFormat.JPEG,
+    timeMs: middleTime, // Zeit in der Mitte des Videos
+    maxHeight: 200, // Höhe des Thumbnails
+    quality: 75,    // Qualität des Thumbnails
+  );
+
+  // Entsorge den Controller
+  controller.dispose();
+
+  if (thumbnailPath != null) {
+    return File(thumbnailPath);
   }
+  return null;
+}
+
+
+
+void _showGallery() {
+  showModalBottomSheet(
+    context: context,
+    builder: (context) => Container(
+      padding: const EdgeInsets.all(8.0),
+      child: GridView.builder(
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          crossAxisSpacing: 8.0,
+          mainAxisSpacing: 8.0,
+        ),
+        itemCount: _recordedVideos.length,
+        itemBuilder: (context, index) {
+          return FutureBuilder<File?>(
+            future: _generateThumbnail(_recordedVideos[index].path),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(
+                  child: CircularProgressIndicator(),
+                );
+              } else if (snapshot.hasError || snapshot.data == null) {
+                return const Center(
+                  child: Icon(Icons.error, color: Colors.red),
+                );
+              }
+
+              final thumbnail = snapshot.data!;
+              return GestureDetector(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) =>
+                          VideoPlayerScreen(videoFile: _recordedVideos[index]),
+                    ),
+                  );
+                },
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: Image.file(
+                        thumbnail,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                    const Center(
+                      child: Icon(
+                        Icons.play_circle_fill,
+                        color: Colors.white,
+                        size: 50,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      ),
+    ),
+  );
+}
+
 
 
   @override
