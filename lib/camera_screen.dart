@@ -387,14 +387,17 @@ void _showGallery() {
       padding: const EdgeInsets.all(8.0),
       child: GridView.builder(
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          crossAxisSpacing: 8.0,
-          mainAxisSpacing: 8.0,
+          crossAxisCount: 2, // Zwei Elemente pro Reihe
+          crossAxisSpacing: 8.0, // Horizontaler Abstand
+          mainAxisSpacing: 40.0, // Mehr vertikaler Abstand zwischen den Reihen
         ),
         itemCount: _recordedVideos.length,
         itemBuilder: (context, index) {
+          final videoFile = _recordedVideos[index];
+          final date = videoFile.lastModifiedSync();
+
           return FutureBuilder<File?>(
-            future: _generateThumbnail(_recordedVideos[index].path),
+            future: _generateThumbnail(videoFile.path),
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Center(
@@ -407,33 +410,52 @@ void _showGallery() {
               }
 
               final thumbnail = snapshot.data!;
-              return GestureDetector(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) =>
-                          VideoPlayerScreen(videoFile: _recordedVideos[index]),
-                    ),
-                  );
-                },
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: Image.file(
-                        thumbnail,
-                        fit: BoxFit.cover,
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              VideoPlayerScreen(videoFile: videoFile),
+                        ),
+                      );
+                    },
+                    child: AspectRatio(
+                      aspectRatio: 1, // Quadratische Anzeige
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8.0), // Runde Ecken
+                              child: Image.file(
+                                thumbnail,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          ),
+                          const Center(
+                            child: Icon(
+                              Icons.play_circle_fill,
+                              color: Colors.white,
+                              size: 50,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const Center(
-                      child: Icon(
-                        Icons.play_circle_fill,
-                        color: Colors.white,
-                        size: 50,
-                      ),
+                  ),
+                  const SizedBox(height: 4.0), // Abstand zum Text
+                  Text(
+                    '${date.day}.${date.month}.${date.year} ${date.hour}:${date.minute.toString().padLeft(2, '0')}', // Format: DD.MM.YYYY HH:mm
+                    style: const TextStyle(
+                      fontSize: 12.0,
+                      color: Colors.white70,
                     ),
-                  ],
-                ),
+                  ),
+                ],
               );
             },
           );
@@ -442,7 +464,6 @@ void _showGallery() {
     ),
   );
 }
-
 
 
   @override
