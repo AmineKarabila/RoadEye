@@ -29,6 +29,20 @@ class _CameraScreenState extends State<CameraScreen> {
   late SpeedService _speedService;  // Speedcalc
   double _currentSpeed = 0.0;       // Speedcalc
 
+  late bool _isSettingsVisible = false; // Ob der Slider sichtbar ist
+
+  
+
+  @override
+  void dispose() {
+    _recordingTimer?.cancel();
+    super.dispose();
+    _cameraService.dispose();
+    _speedService.dispose();
+    _cameraService.dispose();
+    super.dispose();
+  }
+
 
   List<LatLng> _routeCoordinates = [];
   late GoogleMapController _mapController;
@@ -40,6 +54,8 @@ class _CameraScreenState extends State<CameraScreen> {
   bool _isRecording = false;
   List<File> _recordedVideos = [];
 
+  Duration _recordingDuration = Duration.zero;
+  Timer? _recordingTimer;
 //------------    SPEED -----------------
 
   @override
@@ -83,15 +99,6 @@ class _CameraScreenState extends State<CameraScreen> {
   }
   
  
-
-  @override
-  void dispose() {
-    _cameraService.dispose();
-    _speedService.dispose();
-    _cameraService.dispose();
-    super.dispose();
-  }
-
   final FlutterFFmpeg _flutterFFmpeg = FlutterFFmpeg();
   late String _textFilePath;
   List<String> _speedOverlayData = [];
@@ -349,7 +356,9 @@ void _startStopRecording() async {
   try {
     if (_isRecording) {
       // Stop Recording
-      _stopTracking();
+      _stopTracking(); // Tracking beenden
+      _stopRecordingTimer(); // Timer stoppen
+
       final result = await _cameraService.stopVideoRecording();
       if (result != null) {
         // Video in den persistenten Speicher verschieben
@@ -362,35 +371,48 @@ void _startStopRecording() async {
         await _saveRoute(_routeCoordinates, savedVideo.path.split('/').last);
 
         setState(() {
-          _recordedVideos.add(savedVideo); // Persistent gespeichertes Video verwenden
+          _recordedVideos.add(savedVideo); // Persistent gespeichertes Video hinzufügen
         });
 
-        // Prozessierung des Videos (falls weiterhin benötigt)
+        // Prozessierung des Videos
         _processVideo(savedVideo);
       }
+
+      setState(() {
+        _isRecording = false; // Aufnahme beendet
+      });
     } else {
+      // Timer starten
+      _startRecordingTimer();
+
+      // Aufnahmezustand ändern
+      setState(() {
+        _isRecording = true;
+      });
+
       // Start Recording
       if (_cameraService.controller.value.isRecordingVideo) {
         print("Videoaufnahme läuft bereits");
         return;
       }
+
       _speedOverlayData.clear();
       _initializeTextFile();
 
-      await _cameraService.startVideoRecording(); // Nur einmal aufrufen!
+      await _cameraService.startVideoRecording(); // Nur einmal aufrufen
       Timer.periodic(Duration(milliseconds: 500), (timer) {
         if (!_isRecording) timer.cancel();
         _appendSpeedToOverlay();
       });
-      _startTracking();
-    }
 
-    // Status ändern
-    setState(() {
-      _isRecording = !_isRecording;
-    });
+      _startTracking(); // Tracking starten
+    }
   } catch (e) {
     print("Fehler bei der Videoaufnahme: $e");
+    _stopRecordingTimer(); // Timer stoppen, falls Fehler auftritt
+    setState(() {
+      _isRecording = false; // Fehler: Aufnahme beenden
+    });
   }
 }
 
@@ -508,89 +530,283 @@ void _showGallery() {
   );
 }
 
+void _startRecordingTimer() {
+    setState(() {
+      _recordingDuration = Duration.zero; // Reset der Aufnahmezeit
+    });
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: _isCameraInitialized
-            ? Stack(
-                children: [
-                  Positioned.fill(
-                    child: _cameraService.getCameraPreview(),
-                  ),
-                  Positioned(
-                    right: 10,
-                    top: 50,
-                    child: Column(
-                      children: [
-                        IconButton(
-                          onPressed: _toggleFlash,
-                          icon: Icon(
-                            _isFlashOn ? Icons.flash_on : Icons.flash_off,
-                            color: Colors.white,
-                          ),
-                          iconSize: 30.0,
-                        ),
-                        const SizedBox(height: 20),
-                        IconButton(
-                          onPressed: _toggleCameraView,
-                          icon: Icon(
-                            _isFrontCamera ? Icons.camera_front : Icons.camera_rear,
-                            color: Colors.white,
-                          ),
-                          iconSize: 30.0,
-                        ),
-                        const SizedBox(height: 20),
-                        IconButton(
-                          onPressed: _showGallery,
-                          icon: const Icon(
-                            Icons.photo_library,
-                            color: Colors.white,
-                          ),
-                          iconSize: 30.0,
-                        ),
-                      ],
-                    ),
-                  ),
-                  Align(
-                    alignment: Alignment.bottomCenter,
-                    child: GestureDetector(
-                      onTap: _startStopRecording,
-                      child: Container(
-                        width: 70,
-                        height: 70,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: _isRecording ? Colors.red : Colors.white,
-                        ),
-                        child: Icon(
-                          _isRecording ? Icons.stop : Icons.videocam,
-                          color: _isRecording ? Colors.white : Colors.red,
-                          size: 40,
-                        ),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    bottom: 20,
-                    right: 20,
-                    child: Container(
-                      padding: EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.5),
-                        borderRadius: BorderRadius.circular(5),
-                      ),
-                      child: Text(
-                        "${_currentSpeed.toStringAsFixed(1)} km/h",
-                        style: TextStyle(color: Colors.white, fontSize: 16),
-                      ),
-                    ),
-                  ),
-                ],
-              )
-            : const Center(child: CircularProgressIndicator()),
-      ),
-    );
+    _recordingTimer = Timer.periodic(Duration(seconds: 1), (timer) {
+      setState(() {
+        _recordingDuration += Duration(seconds: 1);
+      });
+    });
   }
+
+
+void _stopRecordingTimer() {
+    _recordingTimer?.cancel();
+    setState(() {
+      _recordingDuration = Duration.zero; // Timer zurücksetzen
+    });
+  }
+
+ String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final minutes = twoDigits(duration.inMinutes.remainder(60));
+    final seconds = twoDigits(duration.inSeconds.remainder(60));
+    return "$minutes:$seconds";
+  }
+
+
+// Widget für Slider-Einstellungen
+Widget _buildSetting(String title, String defaultValue, double min, double max) {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        "$title: $defaultValue",
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      Slider(
+        value: (min + max) / 2, // Standardwert in der Mitte
+        min: min,
+        max: max,
+        divisions: (max - min).toInt(),
+        onChanged: (value) {
+          setState(() {
+            // Anpassung der Werte bei Bedarf
+          });
+        },
+      ),
+    ],
+  );
+}
+
+// Widget für Umschaltbare Einstellungen (z.B. Ton oder Kamera)
+Widget _buildToggleSetting(String title, bool defaultValue) {
+  return Row(
+    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    children: [
+      Text(
+        title,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      Switch(
+        value: defaultValue,
+        onChanged: (value) {
+          setState(() {
+            // Umschaltlogik hier
+          });
+        },
+        activeColor: Colors.redAccent,
+      ),
+    ],
+  );
+}
+
+
+//--------------------- 
+@override
+Widget build(BuildContext context) {
+  return Scaffold(
+    body: Stack(
+      children: [
+        // Kamera-Vorschau
+        Positioned.fill(
+          child: _isCameraInitialized
+              ? _cameraService.getCameraPreview()
+              : const Center(child: CircularProgressIndicator()),
+        ),
+        // Erweiterter oberer schwarzer Balken mit Zeitanzeige und Geschwindigkeitsanzeige
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: Container(
+            height: MediaQuery.of(context).padding.top + 50, // Vergrößerter oberer Balken
+            color: Colors.black,
+            padding: const EdgeInsets.symmetric(horizontal: 10), // Abstand links und rechts
+            child: Row(
+              children: [
+                // Platzhalter links für Zentrierung
+                SizedBox(width: 100), // Fester Platzhalter
+                // Zeitanzeige
+                Expanded(
+                  child: Text(
+                    _isRecording ? _formatDuration(_recordingDuration) : "00:00", // Zeit anzeigen
+                    textAlign: TextAlign.center, // Text zentrieren
+                    style: TextStyle(
+                      color: _isRecording ? Colors.redAccent : Colors.white, // Rot während der Aufnahme, Weiß sonst
+                      fontSize: 34,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                // Geschwindigkeitsanzeige rechts
+                SizedBox(
+                  width: 100, // Gleiche Breite wie links
+                  child: Text(
+                    "${_currentSpeed.toStringAsFixed(1)} km/h", // Geschwindigkeit anzeigen
+                    textAlign: TextAlign.right, // Text rechtsbündig
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18, // Kleinere Schriftgröße
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // Rechte Seite mit Icons
+        Positioned(
+          right: 10,
+          top: MediaQuery.of(context).padding.top + 70, // Icons nach unten verschoben
+          child: Column(
+            children: [
+              IconButton(
+                onPressed: _toggleFlash,
+                icon: Icon(
+                  _isFlashOn ? Icons.flash_on : Icons.flash_off,
+                  color: Colors.white,
+                ),
+                iconSize: 30.0,
+              ),
+              const SizedBox(height: 20),
+              IconButton(
+                onPressed: _toggleCameraView,
+                icon: Icon(
+                  _isFrontCamera ? Icons.camera_front : Icons.camera_rear,
+                  color: Colors.white,
+                ),
+                iconSize: 30.0,
+              ),
+              const SizedBox(height: 20),
+              IconButton(
+                onPressed: _showGallery,
+                icon: const Icon(
+                  Icons.photo_library,
+                  color: Colors.white,
+                ),
+                iconSize: 30.0,
+              ),
+              const SizedBox(height: 20),
+              IconButton(
+                onPressed: () {
+                  setState(() {
+                    _isSettingsVisible = !_isSettingsVisible; // Slider ein-/ausblenden
+                  });
+                },
+                icon: const Icon(
+                  Icons.settings,
+                  color: Colors.white,
+                ),
+                iconSize: 30.0,
+              ),
+            ],
+          ),
+        ),
+        // Einstellungs-Slider
+        AnimatedPositioned(
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeInOut,
+          bottom: _isSettingsVisible ? 0 : -MediaQuery.of(context).size.height * 0.75, // Sichtbar oder verborgen
+          left: 0,
+          right: 0,
+          height: MediaQuery.of(context).size.height * 0.75, // 3/4 des Bildschirms
+          child: GestureDetector(
+            onVerticalDragEnd: (details) {
+              if (details.primaryVelocity! > 0) {
+                setState(() {
+                  _isSettingsVisible = false; // Slider hochschieben
+                });
+              }
+            },
+            child: Container(
+              color: Colors.black.withOpacity(0.9), // Dunkler Hintergrund
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  Container(
+                    width: 50,
+                    height: 5,
+                    margin: const EdgeInsets.only(bottom: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(2.5),
+                    ),
+                  ),
+                  const Text(
+                    "Einstellungen",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  _buildSetting("FPS", "30", 1, 120),
+                  const SizedBox(height: 20),
+                  _buildSetting("Auflösung", "1080p", 720, 2160),
+                  const SizedBox(height: 20),
+                  _buildSetting("ISO", "400", 100, 3200),
+                  const SizedBox(height: 20),
+                  _buildToggleSetting("Tonaufnahme", true),
+                  const SizedBox(height: 20),
+                  _buildToggleSetting("Kamera: Weitwinkel", false),
+                  const SizedBox(height: 20),
+                  _buildSetting("Höchstgeschwindigkeit", "60 km/h", 10, 200),
+                ],
+              ),
+            ),
+          ),
+        ),
+        // Aufnahmeknopf
+        if (!_isSettingsVisible) // Playbutton nur anzeigen, wenn der Slider nicht sichtbar ist
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: GestureDetector(
+              onTap: _startStopRecording,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeInOut,
+                margin: const EdgeInsets.only(bottom: 40), // Abstand vom unteren Rand
+                width: _isRecording ? 80 : 70,
+                height: _isRecording ? 80 : 70,
+                decoration: BoxDecoration(
+                  color: _isRecording ? Colors.redAccent.withOpacity(0.8) : Colors.white.withOpacity(0.9),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.3),
+                      blurRadius: 10,
+                      spreadRadius: 1,
+                    ),
+                  ],
+                  border: Border.all(
+                    color: _isRecording ? Colors.red : Colors.grey.shade300,
+                    width: 2,
+                  ),
+                ),
+                child: Icon(
+                  _isRecording ? Icons.stop : Icons.play_arrow,
+                  color: _isRecording ? Colors.white : Colors.black,
+                  size: 40,
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+}
 }
