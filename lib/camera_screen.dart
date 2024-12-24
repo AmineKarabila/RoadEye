@@ -202,10 +202,10 @@ class _CameraScreenState extends State<CameraScreen> {
     _showRoutePopup();
   }
 
- void _showRoutePopup() {
+void _showRoutePopup() {
   if (_routeCoordinates.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Keine Route aufgezeichnet")),
+      const SnackBar(content: Text("Keine Route aufgezeichnet")),
     );
     return;
   }
@@ -215,55 +215,98 @@ class _CameraScreenState extends State<CameraScreen> {
 
   showDialog(
     context: context,
-    builder: (context) => AlertDialog(
-      title: Text('Route anzeigen'),
-      content: SizedBox(
-        height: 300,
-        width: 300,
-        child: GoogleMap(
-          onMapCreated: (GoogleMapController controller) {
-            _mapController = controller;
-            // Kamera auf die gesamte Route einstellen
-            _mapController.animateCamera(
-              CameraUpdate.newLatLngBounds(
-                _calculateBounds(_routeCoordinates),
-                50, // Padding
+    builder: (context) {
+      return Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16.0), // Abgerundete Ecken
+        ),
+        insetPadding: const EdgeInsets.all(16.0), // Padding um den Dialog
+        child: Stack(
+          children: [
+            // Inhalt des Popups
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  height: MediaQuery.of(context).size.height * 0.6, // 60% der Bildschirmhöhe
+                  width: double.infinity,
+                  decoration: const BoxDecoration(
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(16.0),
+                      topRight: Radius.circular(16.0),
+                    ),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(16.0),
+                      topRight: Radius.circular(16.0),
+                    ),
+                    child: GoogleMap(
+                      onMapCreated: (GoogleMapController controller) {
+                        _mapController = controller;
+                        // Kamera auf die gesamte Route einstellen
+                        _mapController.animateCamera(
+                          CameraUpdate.newLatLngBounds(
+                            _calculateBounds(_routeCoordinates),
+                            50, // Padding
+                          ),
+                        );
+                      },
+                      initialCameraPosition: CameraPosition(
+                        target: startPoint,
+                        zoom: 14,
+                      ),
+                      markers: {
+                        Marker(
+                          markerId: const MarkerId('start'),
+                          position: startPoint,
+                          icon: BitmapDescriptor.defaultMarkerWithHue(
+                              BitmapDescriptor.hueGreen), // Grüne Flagge für Start
+                          infoWindow: const InfoWindow(title: 'Startpunkt'),
+                        ),
+                        Marker(
+                          markerId: const MarkerId('end'),
+                          position: endPoint,
+                          icon: BitmapDescriptor.defaultMarkerWithHue(
+                              BitmapDescriptor.hueRed), // Rote Flagge für Ziel
+                          infoWindow: const InfoWindow(title: 'Zielpunkt'),
+                        ),
+                      },
+                      polylines: {
+                        Polyline(
+                          polylineId: const PolylineId('route'),
+                          points: _routeCoordinates,
+                          color: Colors.blue,
+                          width: 4,
+                        ),
+                      },
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16.0),
+                const Text(
+                  'Route anzeigen',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 16.0),
+              ],
+            ),
+            // X-Button oben rechts
+            Positioned(
+              right: 8.0,
+              top: 8.0,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.black),
+                onPressed: () => Navigator.of(context).pop(),
               ),
-            );
-          },
-          initialCameraPosition: CameraPosition(
-            target: startPoint,
-            zoom: 14,
-          ),
-          markers: {
-            Marker(
-              markerId: MarkerId('start'),
-              position: startPoint,
-              infoWindow: InfoWindow(title: 'Startpunkt'),
             ),
-            Marker(
-              markerId: MarkerId('end'),
-              position: endPoint,
-              infoWindow: InfoWindow(title: 'Zielpunkt'),
-            ),
-          },
-          polylines: {
-            Polyline(
-              polylineId: PolylineId('route'),
-              points: _routeCoordinates,
-              color: Colors.blue,
-              width: 4,
-            ),
-          },
+          ],
         ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text('Schließen'),
-        ),
-      ],
-    ),
+      );
+    },
   );
 }
 
